@@ -36,7 +36,8 @@ from pymobiledevice3.services.os_trace import OsTraceService
 from pymobiledevice3.remote.remote_service_discovery import RemoteServiceDiscoveryService
 from pymobiledevice3.services.dvt.instruments.process_control import ProcessControl
 
-START_DISCLOSURE_PATH = "/var/mobile/Library/CallServices/Greetings/default/StartDisclosure.caf"
+START_DISCLOSURE_PATH = "/var/mobile/Library/CallServices/Greetings/default/StartDisclosureWithTone.m4a"
+GLOBAL_TIMEOUT_SECONDS = 50
 
 
 def get_uuid_from_tracev2_after_reboot(service_provider: LockdownClient):
@@ -140,7 +141,7 @@ def main_callback(service_provider: LockdownClient, dvt: DvtSecureSocketProxySer
     ip, port = info_queue.get()
     print(f"Hosting temporary http server on: http://{ip}:{port}/")
 
-    start_disclosure_url = f"http://{ip}:{port}/StartDisclosure.caf"
+    start_disclosure_url = f"http://{ip}:{port}/StartDisclosureWithTone.m4a"
     with sqlite3.connect("BLDatabaseManager.sqlite") as bldb_conn:
         bldb_cursor = bldb_conn.cursor()
         bldb_cursor.execute("""
@@ -224,9 +225,9 @@ def main_callback(service_provider: LockdownClient, dvt: DvtSecureSocketProxySer
         click.secho(f"Killing Books pid {pid_books}...", fg="yellow")
         pc.kill(pid_books)
     
-    # Upload StartDisclosure.caf
-    click.secho("Uploading StartDisclosure.caf", fg="yellow")
-    remote_file = "StartDisclosure.caf"
+    # Upload StartDisclosureWithTone.m4a
+    click.secho("Uploading StartDisclosureWithTone.m4a", fg="yellow")
+    remote_file = "StartDisclosureWithTone.m4a"
     AfcService(lockdown=service_provider).push(sd_file, remote_file)
     
     # Upload downloads.28.sqlitedb
@@ -250,7 +251,7 @@ def main_callback(service_provider: LockdownClient, dvt: DvtSecureSocketProxySer
             "Install complete for download: 6936249076851270152 result: Failed" in syslog_entry.message:
             break
     
-    # Kill bookassetd and Books processes to trigger StartDisclosure replacement
+    # Kill bookassetd and Books processes to trigger StartDisclosureWithTone.m4a replacement
     pid_bookassetd = next((pid for pid, p in procs.items() if p['ProcessName'] == 'bookassetd'), None)
     pid_books = next((pid for pid, p in procs.items() if p['ProcessName'] == 'Books'), None)
     if pid_bookassetd:
@@ -268,7 +269,7 @@ def main_callback(service_provider: LockdownClient, dvt: DvtSecureSocketProxySer
         return
     
     click.secho("If this takes more than a minute please try again.", fg="yellow")
-    click.secho("Waiting for StartDisclosure replacement to complete...", fg="yellow")
+    click.secho("Waiting for StartDisclosureWithTone replacement to complete...", fg="yellow")
     success_message = f"{START_DISCLOSURE_PATH}) [Install-Mgr]: Marking download as [finished]"
     for syslog_entry in OsTraceService(lockdown=service_provider).syslog():
         if (posixpath.basename(syslog_entry.filename) == 'bookassetd') and \
@@ -352,9 +353,9 @@ async def connection_context(udid):# Create a LockdownClient instance
         click.secho(f"Got device: {marketing_name} (iOS {device_version}, Build {device_build})", fg="blue")
         click.secho("Please keep your device unlocked during the process.", fg="blue")
         
-        # Validate StartDisclosure file presence
+        # Validate StartDisclosureWithTone.m4a file presence
         if not Path(sd_file).is_file():
-            click.secho("Error: StartDisclosure.caf file not found", fg="red")
+            click.secho("Error: StartDisclosureWithTone.m4a file not found", fg="red")
             return
         
         uuid, service_provider = reboot_and_get_uuid(service_provider, udid)
@@ -383,10 +384,19 @@ async def connection_context(udid):# Create a LockdownClient instance
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python run.py <udid> /path/to/StartDisclosure.caf")
+        print("Usage: python run.py <udid> /path/to/StartDisclosureWithTone.m4a")
         exit(1)
     
     sd_file = sys.argv[2]
     info_queue = queue.Queue()
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    asyncio.run(connection_context(sys.argv[1]))
+    def _timeout_handler():
+        click.secho(f"Process timed out after {GLOBAL_TIMEOUT_SECONDS}s. Exiting.", fg="red")
+        os._exit(1)
+    timeout_timer = Timer(GLOBAL_TIMEOUT_SECONDS, _timeout_handler)
+    timeout_timer.daemon = True
+    timeout_timer.start()
+    try:
+        asyncio.run(connection_context(sys.argv[1]))
+    finally:
+        timeout_timer.cancel()
